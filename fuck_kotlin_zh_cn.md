@@ -104,7 +104,7 @@
 
 任何人都可以使用JSR305实现来轻而易举地进行NPE防护。
 
-尤其是考虑jetbrains-idea是如此智能，以至于支持了多种JSR305实现的检测，其中包括无约束（jetbrains-annotation），静态增强约束（lombok），动态增强约束（spring）
+尤其是考虑jetbrains-idea是如此智能，以至于支持了多个库的多种JSR305实现的检测，其中包括无约束（jetbrains-annotation），静态增强约束（lombok），动态增强约束（spring）等
 
 作为对比，kotlin只提供了一种编译期的（或许也有运行时期，但这属于我盲区）强制约束，而没有进行提示但是不进行强制约束的选项。
 
@@ -118,7 +118,7 @@
 
 就我个人的使用经验来看，所谓的”Java到Kotlin的转换器“就是一坨屎。
 
-在我的为数不多的几次尝试经历中，几乎任何包含逻辑（非pojo）的类都不可能完美地完成等意义的转换。
+在我的为数不多的几次尝试经历中，几乎任何包含实际逻辑（非纯粹pojo）的类都不可能完美地完成等意义的转换。
 
 ## 5. 简洁谎言
 
@@ -170,3 +170,48 @@ public class A {
 如上，A.java会被编译为A.class与B.class两个文件。而任何反编译器怕是都无法对其溯源了。
 
 但是这个问题在kotlin得到了放大：所有类，不管是否public，都可以塞进一个kt文件中。
+
+## 异常逃逸问题
+
+**Kotlin并不区分受检异常和未受检异常。不用指定函数抛出的异常，而且可以处理也可以不处理异常。**
+
+这也是我上面所说的**但是绝不要java调用kotlin**的原因之一。
+
+kotlin的代码对于java来说，就像是浑身都是lombok.SneakyThrow，并且还是允许throw任何类……
+
+我认为这是一切有良好的异常捕捉习惯的人都无法忍受的事情。
+
+最简单的，考虑如下场景:
+
+在 https://github.com/alibaba/p3c/issues/799#issue-812546537
+中，
+[@youngledo](https://github.com/youngledo)
+提出了一种处理逻辑：
+
+> 每当使用`@Transactional`的时候该规约都提示我需要指定rollbackFor，但我认为是没必要的。理由如下： Spring默认对Runtime和Error回滚无可厚非，毕竟无需显示处理。但是如果是Exception，不是需要人为的做处理吗？既然人为处理，又要分两种情况：
+>
+> 1. catch了不做任何异常抛出，这样显然不用回滚；
+> 2. catch了又抛出Runtime，这种不用说肯定会回滚；
+> 3. catch了但又抛出了Exception，这种默认Spring不回滚；
+> 4. 不catch直接抛出Exception这种也是不回滚，与3同理。
+>
+> 再回到问题本身来看：
+>
+> 1. Runtime和Error的情况Spring已经帮我们做了指定，没有必要重复指定。
+> 2. 而Exception则是根据业务来决定是否需要回滚，如果需要可以转换成Runtime这种Spring默认做了回滚，再去指定rollbackFor纯粹是多余。Spring默认不对Exception处理就是让你自己做选择，而现在到好，不管三七二十一全都需要设置。**当然如果说你抛出Exception，并且还希望回滚，这个时候可以让规约提醒你是否需要回滚，否则不处理。**总之，要不要指定rollbackFor，规约应该只在抛出Exception时候才去提醒，而不是只要用了`@Transactional`就去提醒。
+>
+> 当然，讨论本问题的本质不是说要不要指定rollbackFor，而是我们应该站在自身业务的角度去思考，我们应不应指定。一般来说对于方法内抛出的Exception（如楼下的IOException、SQLException）是不应该再抛到外层让调用方处理，调用方也是无法处理的。
+>
+> 另外我注意到此问题有其它提问#518，并且我也看到回复是针对jdbc 层面的说法，希望该规约（插件也需要更新）能区分Spring-TX的情况，可以删除对该注解的提示，因为该注解本身就是Spring提供的，无需显示指定。
+>
+> ```
+>     <entry key="java.exception.TransactionMustHaveRollbackRule.violation.msg.simple">
+>         <![CDATA[注解【Transactional】需要设置rollbackFor属性。]]>
+>     </entry>
+> ```
+
+显然，在纯java层面，他的策略是正确的。
+
+但是如果在他的框架中，下层实现人员调用了一个kotlin函数，而该kotlin函数非显示地抛出了IOException，那么就有可能突破他的限制，达成糟糕的影响（没有正常回滚）。
+
+## 类刚帮问题
